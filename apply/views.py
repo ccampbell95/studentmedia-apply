@@ -10,7 +10,7 @@ from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.core.context_processors import csrf
 from django.core.mail import send_mail, EmailMessage
-from django.core.paginator import Paginator
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.core.urlresolvers import reverse
 from django.db.models import Count, Max, Q
 from django.http import HttpResponseRedirect, Http404, HttpResponse
@@ -23,8 +23,16 @@ from django.views.decorators.debug import sensitive_post_parameters
 from django.utils import simplejson, timezone
 from forms import *
 from models import *
+from django.core.exceptions import MultipleObjectsReturned
 
-APPLICANT = ProfileStatus.objects.get(name__icontains='applicant')
+try:
+	APPLICANT = ProfileStatus.objects.get(name__icontains='applicant')
+except ProfileStatus.DoesNotExist:
+	APPLICANT = ProfileStatus.objects.create(name='ApplMultipleObjectsReturnedicant')
+except MultipleObjectsReturned:
+	APPLICANT = ProfileStatus.objects.all()[0]
+	print("ERROR: original developer intended for only one Profile Status to contain the word 'Applicant'")
+
 donotreply = 'This email is from the UCLA Student Media application website. Do not respond directly to this email address.\nSend your reply to:'
 subject_prefix = 'Apply: UCLA Student Media - '
 
@@ -365,7 +373,17 @@ def apply(request,pub,pos,app):
 				application_data = application.decode()
 				type = AttachmentType.objects.get(pk=int(application_data[sq[0]]['questions'][sq[1]]['type']))
 				attachment = Attachment(user=entry.applicant,type=type,file=request.FILES[key])
-				attachment.save()
+
+
+				#print("\n\n>>>>>   ", request.FILES[key].name)
+				# TODO: FIX THIS QUICKFIX
+				try:
+					attachment.save()
+				except Exception, e:
+					import logging
+                                        logging.exception(e)
+					return HttpResponse('Something went wrong with your attachment:<br /><br />%s\n<br /><br />Please push the back button in your web browser and reupload your attachment with a simplified filename by removing special characters and/or shortening it.  If the problem persists please email your application to <a href="mailto:online@media.ucla.edu">online@media.ucla.edu</a> describing this problem.' % request.FILES[key])
+
 				entry_data[key] = [u''.join([u'a',unicode(attachment.id)])]
 		entry.encode(entry_data)
 		entry.save()
@@ -474,12 +492,15 @@ def managePeople(request):
 	statuses = request.GET.getlist('status',[])
 	if statuses:
 		people = people.filter(state__id__in=statuses)
+
 	genders = request.GET.getlist('gender',[])
-	if genders:
-		people = people.filter(gender__in=genders)
+	if genders and genders[0] != '':
+		for val in request.GET['gender'].split(' '):
+			people = people.filter(gender__iexact=val)
+
 	quarters = request.GET.getlist('quarter',[])
 	if quarters:
-		people = people.filter(quarter__in=quarterse)
+		people = people.filter(quarter__in=quarters)
 	if get_contains(request,'position'):
 		for val in request.GET['position'].split(' '):
 			people = people.filter(title__icontains=val)
@@ -817,9 +838,81 @@ def entriesJson(request):
 	json = dict(enumerate(Entry.objects.values('id','status','application__quarter','application__year','application__position__title','application__position__publication__title','applicant__profile__first','applicant__profile__middle','applicant__profile__last','applicant__username','applicant__profile__email','submit')))
 	return HttpResponse(simplejson.dumps(json,default=lambda obj: obj.strftime('%D, %I:%M:%S %p')),mimetype='application/json')
 
+def get_entries(request):
+    """Helper function that filters applicants based on url query string.
+       For the manageEntries() view"""
+    entries = Entry.objects.all()
+
+    get_pub = request.GET.getlist('pub',[])
+    if get_pub:
+        entries = entries.filter(application__position__publication__slug__in=get_pub)
+    get_pos = request.GET.getlist('pos',[])
+    if get_pos:
+        entries = entries.filter(application__position__slug__in=get_pos)
+    get_e_quarter = request.GET.getlist('e_quarter',[])
+    if get_e_quarter:
+        entries = entries.filter(quarter__in=get_e_quarter)
+    get_e_year = request.GET.getlist('e_year',[])
+    if get_e_year:
+        entries = entries.filter(year__in=get_e_year)
+    entry_statuses = request.GET.getlist('entry_status',[])
+    if entry_statuses:
+        entries = entries.filter(status__in=entry_statuses)
+    statuses = request.GET.getlist('status',[])
+    if statuses:
+        entries = entries.filter(applicant__profile__state__id__in=statuses)
+    genders = request.GET.getlist('gender',[])
+    if genders and genders[0] != '':
+        for val in request.GET['gender'].split(' '):
+            entries = entries.filter(applicant__profile__gender__iexact=val)
+    quarters = request.GET.getlist('quarter',[])
+    if quarters:
+        entries = entries.filter(applicant__profile__quarter__in=quarters)
+    if get_contains(request,'name'):
+        for val in request.GET['name'].split(' '):
+            entries = entries.filter(Q(applicant__profile__first__icontains=val)|Q(applicant__profile__middle__icontains=val)|Q(applicant__profile__last__icontains=val))
+    if get_contains(request,'email'):
+        for val in request.GET['email'].split(' '):
+            entries = entries.filter(applicant__profile__email__icontains=val)
+    if get_contains(request,'num_mob'):
+        entries = entries.filter(applicant__profile__phone_mob__icontains=request.GET['num_mob'])
+    if get_contains(request,'num_prm'):
+        entries = entries.filter(applicant__profile__phone_perm__icontains=request.GET['num_prm'])
+    if get_contains(request,'addr_loc'):
+        for val in request.GET['addr_loc'].split(' '):
+            entries = entries.filter(Q(applicant__profile__add1_local__icontains=val)|Q(applicant__profile__add2_local__icontains=val)|Q(applicant__profile__city_local__icontains=val)|Q(applicant__profile__state_local__icontains=val)|Q(applicant__profile__postal_local__icontains=val))
+    if get_contains(request,'addr_prm'):
+        for val in request.GET['addr_prm'].split(' '):
+            entries = entries.filter(Q(applicant__profile__add1_perm__icontains=val)|Q(applicant__profile__add2_perm__icontains=val)|Q(applicant__profile__city_perm__icontains=val)|Q(applicant__profile__state_perm__icontains=val)|Q(applicant__profile__postal_perm__icontains=val))
+    if get_contains(request,'major'):
+        for val in request.GET['major'].split(' '):
+            entries = entries.filter(applicant__profile__major__icontains=val)
+    if get_contains(request,'year_low'):
+        entries = entries.filter(applicant__profile__year__gte=request.GET['year_low'])
+    if get_contains(request,'year_high'):
+        entries = entries.filter(applicant__profile__year__lte=request.GET['year_high'])
+    if get_contains(request,'high'):
+        for val in request.GET['high'].split(' '):
+            entries = entries.filter(Q(applicant__profile__high__icontains=val)|Q(applicant__profile__city_high__icontains=val))
+    userlist = list(set([e['applicant__id'] for e in entries.values('applicant__id')]))
+    users = User.objects.filter(pk__in=userlist)
+    ufilter = request.GET.getlist('ufilter',[])
+    if ufilter:
+        dup_users = users.annotate(Count('entry')).filter(entry__count__gt=1)
+        if 'u' in ufilter:
+            entries = entries.exclude(applicant__in=dup_users)
+        if 'd' in ufilter:
+            entries = entries.filter(applicant__in=dup_users)
+    return entries
+
 @csrf_protect
 @staff_member_required
 def manageEntries(request):
+    # TODO: at the url /manage/entries the 'Entries' count currently includes applications submitted by
+    # applicants without a profile but the list below does not show the applications.
+    #  Should note that somewhere or give option to view those applications
+    # TODO: does a search query using GET querystring which creates server errors if user hand types
+    #  in url.  Should create safety-checking/escaping/exception-catching
 	context = baseContext(request,'managepeople')
 	search_form = EntrySearchForm(request.GET)
 	p = 1
@@ -841,69 +934,9 @@ def manageEntries(request):
 		else:
 			apps[str(application.slug)] = {'text':str(application),'poss':[str(application.position.slug)]}
 	pubs = {}
-	entries = Entry.objects.all()
-	get_pub = request.GET.getlist('pub',[])
-	get_pos = request.GET.getlist('pos',[])
-	#get_app = request.GET.getlist('app',[])
-	get_e_quarter = request.GET.getlist('e_quarter',[])
-	get_e_year = request.GET.getlist('e_year',[])
-	if get_pub:
-		entries = entries.filter(application__position__publication__slug__in=get_pub)
-	if get_pos:
-		entries = entries.filter(application__position__slug__in=get_pos)
-	#if get_app:
-	#	entries = entries.filter(application__slug__in=get_app)
-	if get_e_quarter:
-		entries = entries.filter(quarter__in=get_e_quarter)
-	if get_e_year:
-		entries = entries.filter(year__in=get_e_year)
-	entry_statuses = request.GET.getlist('entry_status',[])
-	if entry_statuses:
-		entries = entries.filter(status__in=entry_statuses)
-	statuses = request.GET.getlist('status',[])
-	if statuses:
-		entries = entries.filter(applicant__profile__state__id__in=statuses)
-	genders = request.GET.getlist('gender',[])
-	if genders:
-		entries = entries.filter(applicant__profile__gender__in=genders)
-	quarters = request.GET.getlist('quarter',[])
-	if quarters:
-		entries = entries.filter(applicant__profile__quarter__in=quarters)
-	if get_contains(request,'name'):
-		for val in request.GET['name'].split(' '):
-			entries = entries.filter(Q(applicant__profile__first__icontains=val)|Q(applicant__profile__middle__icontains=val)|Q(applicant__profile__last__icontains=val))
-	if get_contains(request,'email'):
-		for val in request.GET['email'].split(' '):
-			entries = entries.filter(applicant__profile__email__icontains=val)
-	if get_contains(request,'num_mob'):
-		entries = entries.filter(applicant__profile__phone_mob__icontains=request.GET['num_mob'])
-	if get_contains(request,'num_prm'):
-		entries = entries.filter(applicant__profile__phone_perm__icontains=request.GET['num_prm'])
-	if get_contains(request,'addr_loc'):
-		for val in request.GET['addr_loc'].split(' '):
-			entries = entries.filter(Q(applicant__profile__add1_local__icontains=val)|Q(applicant__profile__add2_local__icontains=val)|Q(applicant__profile__city_local__icontains=val)|Q(applicant__profile__state_local__icontains=val)|Q(applicant__profile__postal_local__icontains=val))
-	if get_contains(request,'addr_prm'):
-		for val in request.GET['addr_prm'].split(' '):
-			entries = entries.filter(Q(applicant__profile__add1_perm__icontains=val)|Q(applicant__profile__add2_perm__icontains=val)|Q(applicant__profile__city_perm__icontains=val)|Q(applicant__profile__state_perm__icontains=val)|Q(applicant__profile__postal_perm__icontains=val))
-	if get_contains(request,'major'):
-		for val in request.GET['major'].split(' '):
-			entries = entries.filter(applicant__profile__major__icontains=val)
-	if get_contains(request,'year_low'):
-		entries = entries.filter(applicant__profile__year__gte=request.GET['year_low'])
-	if get_contains(request,'year_high'):
-		entries = entries.filter(applicant__profile__year__lte=request.GET['year_high'])
-	if get_contains(request,'high'):
-		for val in request.GET['high'].split(' '):
-			entries = entries.filter(Q(applicant__profile__high__icontains=val)|Q(applicant__profile__city_high__icontains=val))
-	userlist = list(set([e['applicant__id'] for e in entries.values('applicant__id')]))
-	users = User.objects.filter(pk__in=userlist)
-	ufilter = request.GET.getlist('ufilter',[])
-	if ufilter:
-		dup_users = users.annotate(Count('entry')).filter(entry__count__gt=1)
-		if 'u' in ufilter:
-			entries = entries.exclude(applicant__in=dup_users)
-		if 'd' in ufilter:
-			entries = entries.filter(applicant__in=dup_users)
+
+	entries = get_entries(request)
+
 	if get_contains(request,'p'):
 		p = int(request.GET['p'])
 	if get_contains(request,'pp'):
@@ -956,7 +989,14 @@ def manageEntries(request):
 	context['page_count'] = pages.num_pages
 	context['page_range'] = range(max(p-3,1),min(p+4,pages.num_pages+1))
 	context['search_form'] = search_form
-	context['entries'] = pages.page(p)
+	try:
+		context['entries'] = pages.page(p)
+	except PageNotAnInteger:
+		context['entries'] = pages.page(1)
+	except EmptyPage:
+		# If page is out of range (e.g. 9999), deliver last page of results.
+		context['entries'] = pages.page(pages.num_pages)
+
 	context['search_form'] = search_form
 	context['poss'] = poss
 	context['apps'] = apps

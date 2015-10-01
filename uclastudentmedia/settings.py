@@ -45,7 +45,7 @@ USE_TZ = True
 
 # Absolute filesystem path to the directory that will hold user-uploaded files.
 # Example: "/var/www/example.com/media/"
-MEDIA_ROOT = '/home/django/django_project/uclastudentmedia/media/'
+MEDIA_ROOT = STATIC_ROOT = os.path.join(BASE_DIR, "media")
 
 # URL that handles the media served from MEDIA_ROOT. Make sure to use a
 # trailing slash.
@@ -79,7 +79,7 @@ STATICFILES_FINDERS = (
 )
 
 # Make this unique, and don't share it with anybody.
-SECRET_KEY = '+h7fv7z75%g%#783!x$puk4qrg#hf)9&#t$twzc4g8#g6y2lm0'
+SECRET_KEY = config.SECRET_KEY
 
 # List of callables that know how to import templates from various sources.
 TEMPLATE_LOADERS = (
@@ -132,6 +132,7 @@ INSTALLED_APPS = (
     'apply',
 
     'south',
+    'mailer',
 )
 
 # A sample logging configuration. The only tangible logging
@@ -165,7 +166,8 @@ LOGGING = {
 LOGIN_URL = '/login/'
 
 MESSAGE_STORAGE = 'django.contrib.messages.storage.cookie.CookieStorage'
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_BACKEND = 'mailer.backend.DbBackend'
+MAILER_EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_USE_TLS = config.EMAIL_USE_TLS
 EMAIL_HOST = config.EMAIL_HOST
 EMAIL_PORT = config.EMAIL_PORT
